@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+  <title>待办</title>
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="待办" />
+  <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" href="./icon.svg" />
+  <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+  <style>
+    :root {
+      --bg: #F2F2F7;
+      --card: #FFFFFF;
+      --text: #1C1C1E;
+      --text-secondary: #8E8E93;
+      --separator: rgba(60, 60, 67, 0.12);
+      --accent: #007AFF;
+      --accent-soft: rgba(0, 122, 255, 0.12);
+      --tag-bg: rgba(142, 142, 147, 0.14);
+      --tag-text: #48484A;
+      --due-urgent: #FF3B30;
+      --seg-bg: rgba(118, 118, 128, 0.12);
+      --seg-active: #FFFFFF;
+      --check-border: #C7C7CC;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #000000;
+        --card: #1C1C1E;
+        --text: #F2F2F7;
+        --text-secondary: #8E8E93;
+        --separator: rgba(84, 84, 88, 0.45);
+        --accent: #0A84FF;
+        --accent-soft: rgba(10, 132, 255, 0.18);
+        --tag-bg: rgba(142, 142, 147, 0.22);
+        --tag-text: #D1D1D6;
+        --due-urgent: #FF453A;
+        --seg-bg: rgba(118, 118, 128, 0.24);
+        --seg-active: #3A3A3C;
+        --check-border: #48484A;
+        --shadow: none;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+
+    .app {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: calc(16px + env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom));
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding: 0 4px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .refresh-btn {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 500;
+      padding: 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .refresh-btn:active { opacity: 0.5; }
+    .refresh-btn.spinning svg { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      background: var(--seg-bg);
+      padding: 3px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+
+    .seg-btn {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      padding: 7px 0;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .seg-btn.active {
+      background: var(--seg-active);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    .section { margin-bottom: 22px; }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      padding: 0 14px 8px;
+      letter-spacing: 0.02em;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .empty {
+      padding: 22px 16px;
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+
+    .task-group { border-bottom: 0.5px solid var(--separator); }
+    .task-group:last-child { border-bottom: none; }
+
+    .task-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 13px 14px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.12s ease;
+    }
+
+    .task-row:active { background: var(--seg-bg); }
+
+    .checkbox {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      margin-top: 1px;
+      border-radius: 50%;
+      border: 1.8px solid var(--check-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+    }
+
+    .checkbox.checked {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .checkbox svg {
+      width: 13px;
+      height: 13px;
+      stroke: #FFFFFF;
+      stroke-width: 2.8;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0;
+      transform: scale(0.6);
+      transition: all 0.15s ease;
+    }
+
+    .checkbox.checked svg { opacity: 1; transform: scale(1); }
+
+    .task-body { flex: 1; min-width: 0; }
+
+    .task-title {
+      font-size: 16px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .task-row.done .task-title {
+      color: var(--text-secondary);
+      text-decoration: line-through;
+    }
+
+    .task-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 5px;
+    }
+
+    .tag {
+      font-size: 12px;
+      line-height: 1;
+      padding: 3px 7px;
+      border-radius: 6px;
+      background: var(--tag-bg);
+      color: var(--tag-text);
+      font-weight: 500;
+    }
+
+    .due { font-size: 12px; color: var(--text-secondary); }
+    .due.overdue { color: var(--due-urgent); font-weight: 500; }
+
+    .subtasks { padding: 0 14px 10px 48px; }
+
+    .subtask-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 7px 6px;
+      margin-left: -6px;
+      border-radius: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .subtask-row:active { background: var(--seg-bg); }
+
+    .subtask-row .checkbox {
+      width: 18px;
+      height: 18px;
+      margin-top: 2px;
+      border-width: 1.6px;
+    }
+
+    .subtask-row .checkbox svg { width: 11px; height: 11px; }
+    .subtask-row .task-title { font-size: 14px; color: var(--text); }
+    .subtask-row.done .task-title { color: var(--text-secondary); text-decoration: line-through; }
+
+    .status-bar {
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 12px;
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>待办</h1>
+      <button class="refresh-btn" id="refreshBtn" type="button" aria-label="刷新">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+          <polyline points="21 3 21 9 15 9" />
+        </svg>
+        刷新
+      </button>
+    </header>
+
+    <div class="segmented" role="tablist">
+      <button class="seg-btn active" id="tabActive" type="button" role="tab">待办</button>
+      <button class="seg-btn" id="tabHistory" type="button" role="tab">历史</button>
+    </div>
+
+    <main id="content"></main>
+    <div class="status-bar" id="statusBar"></div>
+  </div>
+
+  <script>
+    const CHECK_SVG = '<svg viewBox="0 0 16 16"><polyline points="3.2 8.4 6.5 11.7 13 4.8"/></svg>';
+    const KEY = 'todo_markdown';
+    const DEFAULT_MD = '# 我的待办备忘录\n\n## 短期任务\n\n## 长期任务\n\n## 已完成历史\n';
+    const IS_LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    const STORE_URL = 'https://accepted-lacewing-134185.upstash.io';
+    const STORE_AUTH = atob('Z1FBQUFBQUFBZ3dwQUFJZ2NESm1ZVE01TWpnd1pXUTJOalEwT0dNeE9UWXpOalUwT0Rnd1pXTmtaV0k0TUE=');
+
+    let currentTab = 'active';
+    let rawMarkdown = '';
+    let parsed = { shortTerm: [], longTerm: [], history: [] };
+    let busy = false;
+
+    function todayStr() {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    }
+
+    function parseMeta(rawText) {
+      let text = rawText.trim();
+      let doneAt = null;
+      let due = null;
+      const tags = [];
+
+      const doneMatch = text.match(/\s*✅\s*([0-9]{4}-[0-9]{2}-[0-9]{2}(?:\s+[0-9]{2}:[0-9]{2})?)\s*$/);
+      if (doneMatch) {
+        doneAt = doneMatch[1].trim();
+        text = text.slice(0, doneMatch.index).trim();
+      }
+
+      const dueMatch = text.match(/\s*📅\s*([^`✅]+?)\s*$/);
+      if (dueMatch) {
+        due = dueMatch[1].trim();
+        text = text.slice(0, dueMatch.index).trim();
+      }
+
+      text = text.replace(/`([^`]+)`/g, (_, tag) => {
+        tags.push(tag.trim());
+        return '';
+      }).replace(/\s{2,}/g, ' ').trim();
+
+      return { title: text, tags, due, doneAt };
+    }
+
+    function formatTaskLine(task, indent = '') {
+      const box = task.done ? '[x]' : '[ ]';
+      const parts = [task.title];
+      if (task.tags && task.tags.length > 0) {
+        for (const t of task.tags) parts.push(`\`${t}\``);
+      }
+      if (task.due) parts.push(`📅 ${task.due}`);
+      if (task.doneAt) parts.push(`✅ ${task.doneAt}`);
+      return `${indent}- ${box} ${parts.join(' ')}`;
+    }
+
+    function parseMarkdown(md) {
+      const lines = (md || '').replace(/\r\n/g, '\n').split('\n');
+      const data = { shortTerm: [], longTerm: [], history: [] };
+      let currentSection = null;
+      let lastTask = null;
+
+      for (const line of lines) {
+        const heading = line.match(/^##\s+(.+)$/);
+        if (heading) {
+          const name = heading[1].trim();
+          lastTask = null;
+          if (name.includes('短期')) currentSection = 'shortTerm';
+          else if (name.includes('长期')) currentSection = 'longTerm';
+          else if (name.includes('已完成') || name.includes('历史')) currentSection = 'history';
+          else currentSection = null;
+          continue;
+        }
+        if (!currentSection) continue;
+
+        const subMatch = line.match(/^(\s+)-\s+\[([ xX])\]\s+(.+)$/);
+        if (subMatch && lastTask) {
+          const meta = parseMeta(subMatch[3]);
+          lastTask.subtasks.push({ done: subMatch[2].toLowerCase() === 'x', ...meta });
+          continue;
+        }
+
+        const topMatch = line.match(/^-\s+\[([ xX])\]\s+(.+)$/);
+        if (topMatch) {
+          const meta = parseMeta(topMatch[2]);
+          const task = { done: topMatch[1].toLowerCase() === 'x', ...meta, subtasks: [] };
+          data[currentSection].push(task);
+          lastTask = task;
+        }
+      }
+      return data;
+    }
+
+    function serializeMarkdown(data) {
+      const out = ['# 我的待办备忘录', ''];
+      out.push('## 短期任务');
+      for (const t of data.shortTerm) {
+        out.push(formatTaskLine(t));
+        for (const s of t.subtasks || []) out.push(formatTaskLine(s, '  '));
+      }
+      out.push('');
+      out.push('## 长期任务');
+      for (const t of data.longTerm) {
+        out.push(formatTaskLine(t));
+        for (const s of t.subtasks || []) out.push(formatTaskLine(s, '  '));
+      }
+      out.push('');
+      out.push('## 已完成历史');
+      for (const t of data.history) {
+        out.push(formatTaskLine(t));
+        for (const s of t.subtasks || []) out.push(formatTaskLine(s, '  '));
+      }
+      out.push('');
+      return out.join('\n');
+    }
+
+    function toggleInData(data, section, index, subIndex) {
+      const list = data[section];
+      if (!list || !list[index]) return;
+      const task = list[index];
+      if (typeof subIndex === 'number') {
+        const sub = task.subtasks[subIndex];
+        if (sub) sub.done = !sub.done;
+        return;
+      }
+      if (section === 'history') {
+        list.splice(index, 1);
+        task.done = false;
+        task.doneAt = null;
+        const target = task.subtasks && task.subtasks.length > 0 ? 'longTerm' : 'shortTerm';
+        data[target].unshift(task);
+      } else {
+        list.splice(index, 1);
+        task.done = true;
+        task.doneAt = todayStr();
+        data.history.unshift(task);
+      }
+    }
+
+    async function redisCmd(args) {
+      const res = await fetch(STORE_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${STORE_AUTH}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(args),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      return json.result;
+    }
+
+    function isOverdue(due) {
+      if (!due) return false;
+      const datePart = due.slice(0, 10);
+      return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(datePart) && datePart < todayStr();
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function renderMeta(task, isHistory) {
+      const parts = [];
+      for (const tag of task.tags || []) {
+        parts.push(`<span class="tag">${escapeHtml(tag)}</span>`);
+      }
+      if (!isHistory && task.due) {
+        const cls = isOverdue(task.due) ? 'due overdue' : 'due';
+        parts.push(`<span class="${cls}">${escapeHtml(task.due)}</span>`);
+      }
+      if (isHistory && task.doneAt) {
+        parts.push(`<span class="due">完成于 ${escapeHtml(task.doneAt)}</span>`);
+      }
+      return parts.length ? `<div class="task-meta">${parts.join('')}</div>` : '';
+    }
+
+    function renderSection(title, sectionKey, items, emptyText) {
+      const isHistory = sectionKey === 'history';
+      let inner = '';
+      if (!items.length) {
+        inner = `<div class="empty">${emptyText}</div>`;
+      } else {
+        inner = items.map((task, idx) => {
+          const subtasksHtml = (task.subtasks && task.subtasks.length)
+            ? `<div class="subtasks">${task.subtasks.map((sub, sIdx) => `
+                <div class="subtask-row ${sub.done ? 'done' : ''}" data-section="${sectionKey}" data-index="${idx}" data-subindex="${sIdx}">
+                  <div class="checkbox ${sub.done ? 'checked' : ''}">${CHECK_SVG}</div>
+                  <div class="task-body">
+                    <div class="task-title">${escapeHtml(sub.title)}</div>
+                  </div>
+                </div>
+              `).join('')}</div>`
+            : '';
+
+          return `
+            <div class="task-group">
+              <div class="task-row ${task.done ? 'done' : ''}" data-section="${sectionKey}" data-index="${idx}">
+                <div class="checkbox ${task.done ? 'checked' : ''}">${CHECK_SVG}</div>
+                <div class="task-body">
+                  <div class="task-title">${escapeHtml(task.title)}</div>
+                  ${renderMeta(task, isHistory)}
+                </div>
+              </div>
+              ${subtasksHtml}
+            </div>
+          `;
+        }).join('');
+      }
+
+      return `
+        <section class="section">
+          ${title ? `<div class="section-title">${title}</div>` : ''}
+          <div class="card">${inner}</div>
+        </section>
+      `;
+    }
+
+    function render() {
+      const content = document.getElementById('content');
+      if (currentTab === 'active') {
+        content.innerHTML =
+          renderSection('短期任务', 'shortTerm', parsed.shortTerm, '暂无短期任务') +
+          renderSection('长期任务', 'longTerm', parsed.longTerm, '暂无长期任务');
+      } else {
+        content.innerHTML = renderSection('', 'history', parsed.history, '暂无已完成记录');
+      }
+    }
+
+    function setStatus(text) {
+      document.getElementById('statusBar').textContent = text || '';
+    }
+
+    async function loadTodos(silent = false) {
+      const btn = document.getElementById('refreshBtn');
+      if (!silent) btn.classList.add('spinning');
+      try {
+        if (IS_LOCAL) {
+          const res = await fetch('/api/todos', { cache: 'no-store' });
+          if (!res.ok) throw new Error('加载失败');
+          const json = await res.json();
+          rawMarkdown = json.markdown || DEFAULT_MD;
+        } else {
+          rawMarkdown = (await redisCmd(['GET', KEY])) || DEFAULT_MD;
+        }
+        parsed = parseMarkdown(rawMarkdown);
+        render();
+        setStatus('');
+      } catch (err) {
+        setStatus('暂时无法同步，请稍后点击刷新');
+      } finally {
+        btn.classList.remove('spinning');
+      }
+    }
+
+    async function handleToggle(section, index, subIndex) {
+      if (busy) return;
+      busy = true;
+      setStatus('正在同步…');
+      try {
+        if (IS_LOCAL) {
+          const payload = { section, index };
+          if (typeof subIndex === 'number') payload.subIndex = subIndex;
+          const res = await fetch('/api/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error('保存失败');
+          const json = await res.json();
+          rawMarkdown = json.markdown || DEFAULT_MD;
+          parsed = parseMarkdown(rawMarkdown);
+        } else {
+          const latest = (await redisCmd(['GET', KEY])) || rawMarkdown || DEFAULT_MD;
+          const nextData = parseMarkdown(latest);
+          toggleInData(nextData, section, index, subIndex);
+          rawMarkdown = serializeMarkdown(nextData);
+          await redisCmd(['SET', KEY, rawMarkdown]);
+          parsed = nextData;
+        }
+        render();
+        setStatus('');
+      } catch (err) {
+        setStatus('保存失败，请检查网络后重试');
+      } finally {
+        busy = false;
+      }
+    }
+
+    document.getElementById('content').addEventListener('click', (e) => {
+      const subRow = e.target.closest('.subtask-row');
+      if (subRow) {
+        handleToggle(subRow.dataset.section, Number(subRow.dataset.index), Number(subRow.dataset.subindex));
+        return;
+      }
+      const row = e.target.closest('.task-row');
+      if (row) {
+        handleToggle(row.dataset.section, Number(row.dataset.index));
+      }
+    });
+
+    document.getElementById('tabActive').addEventListener('click', () => {
+      currentTab = 'active';
+      document.getElementById('tabActive').classList.add('active');
+      document.getElementById('tabHistory').classList.remove('active');
+      render();
+    });
+
+    document.getElementById('tabHistory').addEventListener('click', () => {
+      currentTab = 'history';
+      document.getElementById('tabHistory').classList.add('active');
+      document.getElementById('tabActive').classList.remove('active');
+      render();
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', () => loadTodos(false));
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') loadTodos(true);
+    });
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+
+    loadTodos(false);
+  </script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "待办备忘录",
+  "short_name": "待办",
+  "description": "极简待办事项清单（短期任务 / 长期任务 / 历史记录）",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F2F2F7",
+  "theme_color": "#F2F2F7",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
