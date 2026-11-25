@@ -237,6 +237,29 @@
     .due { font-size: 12px; color: var(--text-secondary); }
     .due.overdue { color: var(--due-urgent); font-weight: 500; }
 
+    .countdown {
+      font-size: 11px;
+      line-height: 1;
+      padding: 3px 6px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+
+    .countdown.future {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .countdown.today {
+      background: rgba(255, 149, 0, 0.16);
+      color: #FF9500;
+    }
+
+    .countdown.overdue {
+      background: rgba(255, 59, 48, 0.14);
+      color: var(--due-urgent);
+    }
+
     .subtasks { padding: 0 14px 10px 48px; }
 
     .subtask-row {
@@ -447,10 +470,26 @@
       return json.result;
     }
 
-    function isOverdue(due) {
-      if (!due) return false;
-      const datePart = due.slice(0, 10);
-      return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(datePart) && datePart < todayStr();
+    function getCountdown(due) {
+      if (!due) return null;
+      const m = due.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{2}):(\d{2}))?/);
+      if (!m) return null;
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const targetStart = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      const diffDays = Math.round((targetStart - todayStart) / 86400000);
+
+      if (diffDays < 0) {
+        return { text: '已过时', cls: 'overdue' };
+      }
+      if (diffDays === 0) {
+        if (m[4] !== undefined) {
+          const targetExact = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+          if (targetExact < now) return { text: '已过时', cls: 'overdue' };
+        }
+        return { text: '今天', cls: 'today' };
+      }
+      return { text: `剩 ${diffDays} 天`, cls: 'future' };
     }
 
     function escapeHtml(str) {
@@ -465,8 +504,12 @@
         parts.push(`<span class="tag">${escapeHtml(tag)}</span>`);
       }
       if (!isHistory && task.due) {
-        const cls = isOverdue(task.due) ? 'due overdue' : 'due';
-        parts.push(`<span class="${cls}">${escapeHtml(task.due)}</span>`);
+        const cd = getCountdown(task.due);
+        const dueCls = cd && cd.cls === 'overdue' ? 'due overdue' : 'due';
+        parts.push(`<span class="${dueCls}">${escapeHtml(task.due)}</span>`);
+        if (cd) {
+          parts.push(`<span class="countdown ${cd.cls}">${escapeHtml(cd.text)}</span>`);
+        }
       }
       if (isHistory && task.doneAt) {
         parts.push(`<span class="due">完成于 ${escapeHtml(task.doneAt)}</span>`);
