@@ -1,4 +1,4 @@
-const CACHE_NAME = 'todo-pwa-v4';
+const CACHE_NAME = 'todo-pwa-v5';
 const ASSETS = ['./', './index.html', './manifest.json', './icon.svg', './apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {

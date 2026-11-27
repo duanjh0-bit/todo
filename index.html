@@ -155,8 +155,18 @@
       font-size: 14px;
     }
 
-    .task-group { border-bottom: 0.5px solid var(--separator); }
+    .task-group {
+      border-bottom: 0.5px solid var(--separator);
+      overflow: hidden;
+      transition: opacity 0.24s ease, max-height 0.24s cubic-bezier(0.4, 0, 0.2, 1), transform 0.24s ease;
+    }
     .task-group:last-child { border-bottom: none; }
+    .task-group.leaving {
+      opacity: 0;
+      transform: translateX(10px);
+      max-height: 0 !important;
+      border-bottom-color: transparent;
+    }
 
     .task-row {
       display: flex;
@@ -165,6 +175,7 @@
       padding: 13px 14px;
       cursor: pointer;
       user-select: none;
+      touch-action: manipulation;
       transition: background 0.12s ease;
     }
 
@@ -180,12 +191,22 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.15s ease;
+      transition: background 0.14s ease, border-color 0.14s ease, transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
 
     .checkbox.checked {
       background: var(--accent);
       border-color: var(--accent);
+    }
+
+    .checkbox.pop {
+      animation: checkPop 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    @keyframes checkPop {
+      0% { transform: scale(1); }
+      45% { transform: scale(1.2); }
+      100% { transform: scale(1); }
     }
 
     .checkbox svg {
@@ -337,9 +358,16 @@
 
     function parseMeta(rawText) {
       let text = rawText.trim();
+      let origin = null;
       let doneAt = null;
       let due = null;
       const tags = [];
+
+      const originMatch = text.match(/\s*<!--\s*(long|short)\s*-->\s*$/);
+      if (originMatch) {
+        origin = originMatch[1] === 'long' ? 'longTerm' : 'shortTerm';
+        text = text.slice(0, originMatch.index).trim();
+      }
 
       const doneMatch = text.match(/\s*✅\s*([0-9]{4}-[0-9]{2}-[0-9]{2}(?:\s+[0-9]{2}:[0-9]{2})?)\s*$/);
       if (doneMatch) {
@@ -358,7 +386,7 @@
         return '';
       }).replace(/\s{2,}/g, ' ').trim();
 
-      return { title: text, tags, due, doneAt };
+      return { title: text, tags, due, doneAt, origin };
     }
 
     function formatTaskLine(task, indent = '') {
@@ -369,6 +397,7 @@
       }
       if (task.due) parts.push(`📅 ${task.due}`);
       if (task.doneAt) parts.push(`✅ ${task.doneAt}`);
+      if (task.done && task.origin === 'longTerm') parts.push('<!-- long -->');
       return `${indent}- ${box} ${parts.join(' ')}`;
     }
 
@@ -445,12 +474,14 @@
         list.splice(index, 1);
         task.done = false;
         task.doneAt = null;
-        const target = task.subtasks && task.subtasks.length > 0 ? 'longTerm' : 'shortTerm';
+        const target = (task.origin === 'longTerm' || (task.subtasks && task.subtasks.length > 0)) ? 'longTerm' : 'shortTerm';
+        task.origin = null;
         data[target].unshift(task);
       } else {
         list.splice(index, 1);
         task.done = true;
         task.doneAt = todayStr();
+        task.origin = section;
         data.history.unshift(task);
       }
     }
@@ -595,49 +626,80 @@
       }
     }
 
-    async function handleToggle(section, index, subIndex) {
-      if (busy) return;
-      busy = true;
-      setStatus('正在同步…');
-      try {
+    let syncQueue = Promise.resolve();
+
+    function enqueuePersist(markdownToSave, fallbackPayload) {
+      syncQueue = syncQueue.then(async () => {
         if (IS_LOCAL) {
-          const payload = { section, index };
-          if (typeof subIndex === 'number') payload.subIndex = subIndex;
           const res = await fetch('/api/toggle', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(fallbackPayload),
           });
           if (!res.ok) throw new Error('保存失败');
           const json = await res.json();
           rawMarkdown = json.markdown || DEFAULT_MD;
-          parsed = parseMarkdown(rawMarkdown);
         } else {
-          const latest = (await redisCmd(['GET', KEY])) || rawMarkdown || DEFAULT_MD;
-          const nextData = parseMarkdown(latest);
-          toggleInData(nextData, section, index, subIndex);
-          rawMarkdown = serializeMarkdown(nextData);
-          await redisCmd(['SET', KEY, rawMarkdown]);
-          parsed = nextData;
+          await redisCmd(['SET', KEY, markdownToSave]);
         }
-        render();
-        setStatus('');
-      } catch (err) {
-        setStatus('保存失败，请检查网络后重试');
-      } finally {
-        busy = false;
+      }).catch(() => {
+        setStatus('保存失败，请检查网络后点击刷新');
+        loadTodos(true);
+      });
+      return syncQueue;
+    }
+
+    async function handleToggle(section, index, subIndex, rowEl) {
+      if (busy) return;
+      const list = parsed[section];
+      if (!list || !list[index]) return;
+
+      const isSub = typeof subIndex === 'number';
+      const boxEl = rowEl ? rowEl.querySelector('.checkbox') : null;
+
+      // 1. Instant 0ms visual feedback (checkmark + strikethrough + tactile pop)
+      if (rowEl && boxEl) {
+        const willBeDone = isSub
+          ? !list[index].subtasks[subIndex].done
+          : section !== 'history';
+        boxEl.classList.toggle('checked', willBeDone);
+        rowEl.classList.toggle('done', willBeDone);
+        boxEl.classList.remove('pop');
+        void boxEl.offsetWidth;
+        boxEl.classList.add('pop');
       }
+
+      // 2. Update in-memory data immediately and start cloud sync in parallel
+      toggleInData(parsed, section, index, subIndex);
+      rawMarkdown = serializeMarkdown(parsed);
+      const payload = isSub ? { section, index, subIndex } : { section, index };
+      enqueuePersist(rawMarkdown, payload);
+
+      // 3. Subtask stays in place: no collapse needed
+      if (isSub) return;
+
+      // 4. Top-level task: hold checkmark briefly so it feels deliberate, then smoothly collapse
+      busy = true;
+      const groupEl = rowEl ? rowEl.closest('.task-group') : null;
+      if (groupEl) {
+        groupEl.style.maxHeight = `${groupEl.offsetHeight}px`;
+        await new Promise((r) => setTimeout(r, 360));
+        groupEl.classList.add('leaving');
+        await new Promise((r) => setTimeout(r, 240));
+      }
+      render();
+      busy = false;
     }
 
     document.getElementById('content').addEventListener('click', (e) => {
       const subRow = e.target.closest('.subtask-row');
       if (subRow) {
-        handleToggle(subRow.dataset.section, Number(subRow.dataset.index), Number(subRow.dataset.subindex));
+        handleToggle(subRow.dataset.section, Number(subRow.dataset.index), Number(subRow.dataset.subindex), subRow);
         return;
       }
       const row = e.target.closest('.task-row');
       if (row) {
-        handleToggle(row.dataset.section, Number(row.dataset.index));
+        handleToggle(row.dataset.section, Number(row.dataset.index), undefined, row);
       }
     });
 
