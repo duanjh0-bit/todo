@@ -95,6 +95,7 @@
       padding: 6px 10px;
       border-radius: 8px;
       cursor: pointer;
+      touch-action: manipulation;
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -123,6 +124,7 @@
       padding: 7px 0;
       border-radius: 8px;
       cursor: pointer;
+      touch-action: manipulation;
       transition: background 0.15s ease, box-shadow 0.15s ease;
     }
 
@@ -158,14 +160,16 @@
     .task-group {
       border-bottom: 0.5px solid var(--separator);
       overflow: hidden;
-      transition: opacity 0.24s ease, max-height 0.24s cubic-bezier(0.4, 0, 0.2, 1), transform 0.24s ease;
+      will-change: opacity, max-height, transform;
+      transition: opacity 0.22s ease, max-height 0.24s cubic-bezier(0.25, 0.8, 0.25, 1), transform 0.22s ease;
     }
     .task-group:last-child { border-bottom: none; }
     .task-group.leaving {
       opacity: 0;
-      transform: translateX(10px);
+      transform: translateX(12px);
       max-height: 0 !important;
       border-bottom-color: transparent;
+      pointer-events: none;
     }
 
     .task-row {
@@ -176,7 +180,7 @@
       cursor: pointer;
       user-select: none;
       touch-action: manipulation;
-      transition: background 0.12s ease;
+      transition: background 0.1s ease;
     }
 
     .task-row:active { background: var(--seg-bg); }
@@ -191,7 +195,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: background 0.14s ease, border-color 0.14s ease, transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
+      transition: background 0.12s ease, border-color 0.12s ease;
     }
 
     .checkbox.checked {
@@ -205,7 +209,7 @@
 
     @keyframes checkPop {
       0% { transform: scale(1); }
-      45% { transform: scale(1.2); }
+      45% { transform: scale(1.22); }
       100% { transform: scale(1); }
     }
 
@@ -218,8 +222,8 @@
       stroke-linecap: round;
       stroke-linejoin: round;
       opacity: 0;
-      transform: scale(0.6);
-      transition: all 0.15s ease;
+      transform: scale(0.5);
+      transition: opacity 0.12s ease, transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
 
     .checkbox.checked svg { opacity: 1; transform: scale(1); }
@@ -230,6 +234,7 @@
       font-size: 16px;
       line-height: 1.4;
       word-break: break-word;
+      transition: color 0.14s ease;
     }
 
     .task-row.done .task-title {
@@ -292,6 +297,7 @@
       border-radius: 8px;
       cursor: pointer;
       user-select: none;
+      touch-action: manipulation;
     }
 
     .subtask-row:active { background: var(--seg-bg); }
@@ -346,10 +352,24 @@
     const STORE_URL = 'https://accepted-lacewing-134185.upstash.io';
     const STORE_AUTH = atob('Z1FBQUFBQUFBZ3dwQUFJZ2NESm1ZVE01TWpnd1pXUTJOR0UwT0dNeE9UWXpOalUwT0Rnd1pXTmtaV0k0TUE=');
 
+    const EMPTY_TEXT = {
+      shortTerm: '暂无短期任务',
+      longTerm: '暂无长期任务',
+      history: '暂无已完成记录',
+    };
+
     let currentTab = 'active';
     let rawMarkdown = '';
     let parsed = { shortTerm: [], longTerm: [], history: [] };
-    let busy = false;
+    let nextId = 1;
+    const pendingRemovals = new Map();
+    let flushTimer = null;
+    let dirty = false;
+    let syncInFlight = Promise.resolve();
+
+    function genId() {
+      return `t_${nextId++}`;
+    }
 
     function todayStr() {
       const now = new Date();
@@ -423,14 +443,14 @@
         const subMatch = line.match(/^(\s+)-\s+\[([ xX])\]\s+(.+)$/);
         if (subMatch && lastTask) {
           const meta = parseMeta(subMatch[3]);
-          lastTask.subtasks.push({ done: subMatch[2].toLowerCase() === 'x', ...meta });
+          lastTask.subtasks.push({ _id: genId(), done: subMatch[2].toLowerCase() === 'x', ...meta });
           continue;
         }
 
         const topMatch = line.match(/^-\s+\[([ xX])\]\s+(.+)$/);
         if (topMatch) {
           const meta = parseMeta(topMatch[2]);
-          const task = { done: topMatch[1].toLowerCase() === 'x', ...meta, subtasks: [] };
+          const task = { _id: genId(), done: topMatch[1].toLowerCase() === 'x', ...meta, subtasks: [] };
           data[currentSection].push(task);
           lastTask = task;
         }
@@ -461,31 +481,6 @@
       return out.join('\n');
     }
 
-    function toggleInData(data, section, index, subIndex) {
-      const list = data[section];
-      if (!list || !list[index]) return;
-      const task = list[index];
-      if (typeof subIndex === 'number') {
-        const sub = task.subtasks[subIndex];
-        if (sub) sub.done = !sub.done;
-        return;
-      }
-      if (section === 'history') {
-        list.splice(index, 1);
-        task.done = false;
-        task.doneAt = null;
-        const target = (task.origin === 'longTerm' || (task.subtasks && task.subtasks.length > 0)) ? 'longTerm' : 'shortTerm';
-        task.origin = null;
-        data[target].unshift(task);
-      } else {
-        list.splice(index, 1);
-        task.done = true;
-        task.doneAt = todayStr();
-        task.origin = section;
-        data.history.unshift(task);
-      }
-    }
-
     async function redisCmd(args) {
       const res = await fetch(STORE_URL, {
         method: 'POST',
@@ -501,6 +496,38 @@
       return json.result;
     }
 
+    function scheduleSync(immediate = false) {
+      dirty = true;
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      const run = () => {
+        if (!dirty) return;
+        dirty = false;
+        const snapshot = serializeMarkdown(parsed);
+        rawMarkdown = snapshot;
+        syncInFlight = syncInFlight.then(async () => {
+          if (IS_LOCAL) {
+            const res = await fetch('/api/todos', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ markdown: snapshot }),
+            });
+            if (!res.ok) throw new Error('保存失败');
+          } else {
+            await redisCmd(['SET', KEY, snapshot]);
+          }
+          setStatus('');
+        }).catch(() => {
+          setStatus('同步失败，请稍后点击刷新');
+        });
+      };
+
+      if (immediate) run();
+      else flushTimer = setTimeout(run, 260);
+    }
+
     function getCountdown(due) {
       if (!due) return null;
       const m = due.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{2}):(\d{2}))?/);
@@ -510,9 +537,7 @@
       const targetStart = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
       const diffDays = Math.round((targetStart - todayStart) / 86400000);
 
-      if (diffDays < 0) {
-        return { text: '已过时', cls: 'overdue' };
-      }
+      if (diffDays < 0) return { text: '已过时', cls: 'overdue' };
       if (diffDays === 0) {
         if (m[4] !== undefined) {
           const targetExact = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
@@ -548,16 +573,16 @@
       return parts.length ? `<div class="task-meta">${parts.join('')}</div>` : '';
     }
 
-    function renderSection(title, sectionKey, items, emptyText) {
+    function renderSection(title, sectionKey, items) {
       const isHistory = sectionKey === 'history';
       let inner = '';
       if (!items.length) {
-        inner = `<div class="empty">${emptyText}</div>`;
+        inner = `<div class="empty">${EMPTY_TEXT[sectionKey]}</div>`;
       } else {
-        inner = items.map((task, idx) => {
+        inner = items.map((task) => {
           const subtasksHtml = (task.subtasks && task.subtasks.length)
-            ? `<div class="subtasks">${task.subtasks.map((sub, sIdx) => `
-                <div class="subtask-row ${sub.done ? 'done' : ''}" data-section="${sectionKey}" data-index="${idx}" data-subindex="${sIdx}">
+            ? `<div class="subtasks">${task.subtasks.map((sub) => `
+                <div class="subtask-row ${sub.done ? 'done' : ''}" data-section="${sectionKey}" data-id="${task._id}" data-subid="${sub._id}">
                   <div class="checkbox ${sub.done ? 'checked' : ''}">${CHECK_SVG}</div>
                   <div class="task-body">
                     <div class="task-title">${escapeHtml(sub.title)}</div>
@@ -567,8 +592,8 @@
             : '';
 
           return `
-            <div class="task-group">
-              <div class="task-row ${task.done ? 'done' : ''}" data-section="${sectionKey}" data-index="${idx}">
+            <div class="task-group" data-id="${task._id}" data-section="${sectionKey}">
+              <div class="task-row ${task.done ? 'done' : ''}" data-section="${sectionKey}" data-id="${task._id}">
                 <div class="checkbox ${task.done ? 'checked' : ''}">${CHECK_SVG}</div>
                 <div class="task-body">
                   <div class="task-title">${escapeHtml(task.title)}</div>
@@ -582,21 +607,27 @@
       }
 
       return `
-        <section class="section">
+        <section class="section" data-section="${sectionKey}">
           ${title ? `<div class="section-title">${title}</div>` : ''}
-          <div class="card">${inner}</div>
+          <div class="card" data-card="${sectionKey}">${inner}</div>
         </section>
       `;
     }
 
+    function clearPendingTimers() {
+      for (const pending of pendingRemovals.values()) clearTimeout(pending.timer);
+      pendingRemovals.clear();
+    }
+
     function render() {
+      clearPendingTimers();
       const content = document.getElementById('content');
       if (currentTab === 'active') {
         content.innerHTML =
-          renderSection('短期任务', 'shortTerm', parsed.shortTerm, '暂无短期任务') +
-          renderSection('长期任务', 'longTerm', parsed.longTerm, '暂无长期任务');
+          renderSection('短期任务', 'shortTerm', parsed.shortTerm) +
+          renderSection('长期任务', 'longTerm', parsed.longTerm);
       } else {
-        content.innerHTML = renderSection('', 'history', parsed.history, '暂无已完成记录');
+        content.innerHTML = renderSection('', 'history', parsed.history);
       }
     }
 
@@ -605,6 +636,8 @@
     }
 
     async function loadTodos(silent = false) {
+      if (dirty) scheduleSync(true);
+      await syncInFlight;
       const btn = document.getElementById('refreshBtn');
       if (!silent) btn.classList.add('spinning');
       try {
@@ -626,84 +659,122 @@
       }
     }
 
-    let syncQueue = Promise.resolve();
-
-    function enqueuePersist(markdownToSave, fallbackPayload) {
-      syncQueue = syncQueue.then(async () => {
-        if (IS_LOCAL) {
-          const res = await fetch('/api/toggle', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(fallbackPayload),
-          });
-          if (!res.ok) throw new Error('保存失败');
-          const json = await res.json();
-          rawMarkdown = json.markdown || DEFAULT_MD;
-        } else {
-          await redisCmd(['SET', KEY, markdownToSave]);
-        }
-      }).catch(() => {
-        setStatus('保存失败，请检查网络后点击刷新');
-        loadTodos(true);
-      });
-      return syncQueue;
+    function triggerPop(boxEl) {
+      boxEl.classList.remove('pop');
+      void boxEl.offsetWidth;
+      boxEl.classList.add('pop');
     }
 
-    async function handleToggle(section, index, subIndex, rowEl) {
-      if (busy) return;
+    function toggleSubtask(section, taskId, subId, subRowEl) {
+      const task = parsed[section].find((t) => t._id === taskId);
+      if (!task) return;
+      const sub = task.subtasks.find((s) => s._id === subId);
+      if (!sub) return;
+
+      sub.done = !sub.done;
+      const boxEl = subRowEl.querySelector('.checkbox');
+      subRowEl.classList.toggle('done', sub.done);
+      boxEl.classList.toggle('checked', sub.done);
+      triggerPop(boxEl);
+      scheduleSync(false);
+    }
+
+    function toggleTopTask(section, taskId, rowEl) {
+      const groupEl = rowEl.closest('.task-group');
+      const boxEl = rowEl.querySelector('.checkbox');
+      const cardEl = groupEl.closest('.card');
+
+      // If user taps again during the 320ms hold window, undo immediately!
+      if (pendingRemovals.has(taskId)) {
+        const pending = pendingRemovals.get(taskId);
+        clearTimeout(pending.timer);
+        pendingRemovals.delete(taskId);
+
+        const destList = parsed[pending.destSection];
+        const idx = destList.findIndex((t) => t._id === taskId);
+        if (idx !== -1) {
+          const [task] = destList.splice(idx, 1);
+          task.done = pending.prevDone;
+          task.doneAt = pending.prevDoneAt;
+          task.origin = pending.prevOrigin;
+          parsed[section].splice(Math.min(pending.origIdx, parsed[section].length), 0, task);
+          scheduleSync(false);
+        }
+
+        rowEl.classList.toggle('done', pending.prevDone);
+        boxEl.classList.toggle('checked', pending.prevDone);
+        triggerPop(boxEl);
+        return;
+      }
+
+      // 1. Update data model immediately (so switching tabs or closing app never loses a tap!)
       const list = parsed[section];
-      if (!list || !list[index]) return;
+      const idx = list.findIndex((t) => t._id === taskId);
+      if (idx === -1) return;
 
-      const isSub = typeof subIndex === 'number';
-      const boxEl = rowEl ? rowEl.querySelector('.checkbox') : null;
+      const [task] = list.splice(idx, 1);
+      const prevDone = task.done;
+      const prevDoneAt = task.doneAt;
+      const prevOrigin = task.origin;
+      let destSection;
 
-      // 1. Instant 0ms visual feedback (checkmark + strikethrough + tactile pop)
-      if (rowEl && boxEl) {
-        const willBeDone = isSub
-          ? !list[index].subtasks[subIndex].done
-          : section !== 'history';
-        boxEl.classList.toggle('checked', willBeDone);
-        rowEl.classList.toggle('done', willBeDone);
-        boxEl.classList.remove('pop');
-        void boxEl.offsetWidth;
-        boxEl.classList.add('pop');
+      if (section === 'history') {
+        task.done = false;
+        task.doneAt = null;
+        destSection = (task.origin === 'longTerm' || (task.subtasks && task.subtasks.length > 0))
+          ? 'longTerm'
+          : 'shortTerm';
+        task.origin = null;
+        parsed[destSection].unshift(task);
+      } else {
+        task.done = true;
+        task.doneAt = todayStr();
+        task.origin = section;
+        destSection = 'history';
+        parsed.history.unshift(task);
       }
+      scheduleSync(false);
 
-      // 2. Update in-memory data immediately and start cloud sync in parallel
-      toggleInData(parsed, section, index, subIndex);
-      rawMarkdown = serializeMarkdown(parsed);
-      const payload = isSub ? { section, index, subIndex } : { section, index };
-      enqueuePersist(rawMarkdown, payload);
+      // 2. Instant 0ms visual feedback (checkmark + strikethrough + pop), ZERO blocking!
+      const nextDone = section !== 'history';
+      rowEl.classList.toggle('done', nextDone);
+      boxEl.classList.toggle('checked', nextDone);
+      triggerPop(boxEl);
 
-      // 3. Subtask stays in place: no collapse needed
-      if (isSub) return;
+      // 3. Hold checkmark briefly so it feels crisp, then smoothly collapse only this item
+      const timer = setTimeout(() => {
+        pendingRemovals.delete(taskId);
+        if (groupEl && groupEl.isConnected) {
+          groupEl.style.maxHeight = `${groupEl.offsetHeight}px`;
+          requestAnimationFrame(() => {
+            groupEl.classList.add('leaving');
+          });
+          setTimeout(() => {
+            if (groupEl.isConnected) groupEl.remove();
+            if (cardEl && cardEl.isConnected && !cardEl.querySelector('.task-group')) {
+              cardEl.innerHTML = `<div class="empty">${EMPTY_TEXT[section]}</div>`;
+            }
+          }, 240);
+        }
+      }, 320);
 
-      // 4. Top-level task: hold checkmark briefly so it feels deliberate, then smoothly collapse
-      busy = true;
-      const groupEl = rowEl ? rowEl.closest('.task-group') : null;
-      if (groupEl) {
-        groupEl.style.maxHeight = `${groupEl.offsetHeight}px`;
-        await new Promise((r) => setTimeout(r, 360));
-        groupEl.classList.add('leaving');
-        await new Promise((r) => setTimeout(r, 240));
-      }
-      render();
-      busy = false;
+      pendingRemovals.set(taskId, { timer, destSection, origIdx: idx, prevDone, prevDoneAt, prevOrigin });
     }
 
     document.getElementById('content').addEventListener('click', (e) => {
       const subRow = e.target.closest('.subtask-row');
       if (subRow) {
-        handleToggle(subRow.dataset.section, Number(subRow.dataset.index), Number(subRow.dataset.subindex), subRow);
+        toggleSubtask(subRow.dataset.section, subRow.dataset.id, subRow.dataset.subid, subRow);
         return;
       }
       const row = e.target.closest('.task-row');
       if (row) {
-        handleToggle(row.dataset.section, Number(row.dataset.index), undefined, row);
+        toggleTopTask(row.dataset.section, row.dataset.id, row);
       }
     });
 
     document.getElementById('tabActive').addEventListener('click', () => {
+      if (currentTab === 'active') return;
       currentTab = 'active';
       document.getElementById('tabActive').classList.add('active');
       document.getElementById('tabHistory').classList.remove('active');
@@ -711,6 +782,7 @@
     });
 
     document.getElementById('tabHistory').addEventListener('click', () => {
+      if (currentTab === 'history') return;
       currentTab = 'history';
       document.getElementById('tabHistory').classList.add('active');
       document.getElementById('tabActive').classList.remove('active');
@@ -720,7 +792,15 @@
     document.getElementById('refreshBtn').addEventListener('click', () => loadTodos(false));
 
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') loadTodos(true);
+      if (document.visibilityState === 'hidden' && dirty) {
+        scheduleSync(true);
+      } else if (document.visibilityState === 'visible') {
+        loadTodos(true);
+      }
+    });
+
+    window.addEventListener('pagehide', () => {
+      if (dirty) scheduleSync(true);
     });
 
     if ('serviceWorker' in navigator) {
