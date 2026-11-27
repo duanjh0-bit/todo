@@ -1,9 +1,13 @@
-const CACHE_NAME = 'todo-pwa-v6';
+const CACHE_NAME = 'todo-pwa-v7';
 const ASSETS = ['./', './index.html', './manifest.json', './icon.svg', './apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME)
+      .then((cache) => Promise.all(ASSETS.map((url) =>
+        fetch(new Request(url, { cache: 'no-cache' })).then((res) => cache.put(url, res))
+      )))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -20,8 +24,11 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/') || url.hostname.includes('upstash.io')) {
     return;
   }
+  const isNav = event.request.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html');
+  const req = isNav ? new Request(event.request, { cache: 'no-cache' }) : event.request;
+
   event.respondWith(
-    fetch(event.request)
+    fetch(req)
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
